@@ -186,10 +186,13 @@ func (sc serviceConfigs) getServiceByAlias(alias string) *ServiceConfig {
 
 var SupportedServices = serviceConfigs{
 	{
+		// Generic namespace for custom metrics pushed by the CloudWatch Agent -- no fixed resource
+		// type, so there's no ARN to reconstruct.
 		Namespace: "CWAgent",
 		Alias:     "cwagent",
 	},
 	{
+		// Account/service-level API usage and quota metrics, not tied to a discrete resource.
 		Namespace: "AWS/Usage",
 		Alias:     "usage",
 	},
@@ -352,6 +355,7 @@ var SupportedServices = serviceConfigs{
 		// dimension for this namespace.
 	},
 	{
+		// Account-level billing/cost metrics, not tied to a discrete resource.
 		Namespace: "AWS/Billing",
 		Alias:     "billing",
 	},
@@ -1208,6 +1212,7 @@ var SupportedServices = serviceConfigs{
 		ArnFromDimensions: arnFromDimensions("ec2", "transit-gateway/%s", "TransitGateway"),
 	},
 	{
+		// Trusted Advisor check-result metrics, not resource metrics -- no ARN to reconstruct.
 		Namespace: "AWS/TrustedAdvisor",
 		Alias:     "trustedadvisor",
 	},
@@ -1365,6 +1370,9 @@ var SupportedServices = serviceConfigs{
 		ArnFromDimensions: arnFromDimensions("ec2", "ipam-pool/%s", "IpamPoolId"),
 	},
 	{
+		// On-demand foundation model invocation metrics; foundation models are AWS-owned, not a
+		// discrete customer resource with an ARN in this account (unlike Bedrock/Agents and
+		// Bedrock/Guardrails below, which are customer-owned resources).
 		Namespace: "AWS/Bedrock",
 		Alias:     "bedrock",
 	},
