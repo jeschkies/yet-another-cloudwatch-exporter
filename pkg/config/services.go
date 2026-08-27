@@ -971,8 +971,17 @@ var SupportedServices = serviceConfigs{
 		ArnFromDimensions: arnFromDimensions("ec2", "vpc-endpoint-service/%s", "Service_Id"),
 	},
 	{
+		// Verified against a live workspace: the "Workspace" dimension is the workspace ID and maps
+		// directly onto the ARN (service segment is "aps", not "prometheus").
 		Namespace: "AWS/Prometheus",
 		Alias:     "amp",
+		ResourceFilters: []*string{
+			aws.String("aps:workspace"),
+		},
+		DimensionRegexps: []*regexp.Regexp{
+			regexp.MustCompile(":workspace/(?P<Workspace>[^/]+)"),
+		},
+		ArnFromDimensions: arnFromDimensions("aps", "workspace/%s", "Workspace"),
 	},
 	{
 		Namespace: "AWS/QLDB",
@@ -1067,12 +1076,29 @@ var SupportedServices = serviceConfigs{
 		ArnFromDimensions: arnFromDimensionsNoAccount("s3", "%s", "BucketName"),
 	},
 	{
+		// Verified against a live schedule: CloudWatch only publishes AWS/Scheduler metrics dimensioned
+		// by "ScheduleGroup" -- there's no per-schedule dimension at all, so the resource this
+		// reconstructs is the schedule group, not an individual schedule.
 		Namespace: "AWS/Scheduler",
 		Alias:     "scheduler",
+		ResourceFilters: []*string{
+			aws.String("scheduler:schedule-group"),
+		},
+		DimensionRegexps: []*regexp.Regexp{
+			regexp.MustCompile(":schedule-group/(?P<ScheduleGroup>[^/]+)"),
+		},
+		ArnFromDimensions: arnFromDimensions("scheduler", "schedule-group/%s", "ScheduleGroup"),
 	},
 	{
 		Namespace: "AWS/ECR",
 		Alias:     "ecr",
+		ResourceFilters: []*string{
+			aws.String("ecr:repository"),
+		},
+		DimensionRegexps: []*regexp.Regexp{
+			regexp.MustCompile(":repository/(?P<RepositoryName>.+)$"),
+		},
+		ArnFromDimensions: arnFromDimensions("ecr", "repository/%s", "RepositoryName"),
 	},
 	{
 		Namespace: "AWS/Timestream",
