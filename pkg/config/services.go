@@ -298,6 +298,13 @@ var SupportedServices = serviceConfigs{
 	{
 		Namespace: "AWS/AppRunner",
 		Alias:     "apprunner",
+		ResourceFilters: []*string{
+			aws.String("apprunner:service"),
+		},
+		DimensionRegexps: []*regexp.Regexp{
+			regexp.MustCompile(":service/(?P<ServiceName>[^/]+)/(?P<ServiceID>[^/]+)$"),
+		},
+		ArnFromDimensions: arnFromDimensions("apprunner", "service/%s/%s", "ServiceName", "ServiceID"),
 	},
 	{
 		Namespace: "AWS/AppSync",
@@ -1067,6 +1074,13 @@ var SupportedServices = serviceConfigs{
 	{
 		Namespace: "AWS/RUM",
 		Alias:     "rum",
+		ResourceFilters: []*string{
+			aws.String("rum:appmonitor"),
+		},
+		// Real CloudWatch dimension name is "application_name" (lowercase with underscore), not a
+		// space-converted PascalCase name -- no DimensionRegexps entry to avoid this file's usual
+		// underscore-means-space convention mangling it into "application name".
+		ArnFromDimensions: arnFromDimensions("rum", "appmonitor/%s", "application_name"),
 	},
 	{
 		Namespace: "AWS/S3",
@@ -1108,6 +1122,18 @@ var SupportedServices = serviceConfigs{
 	{
 		Namespace: "AWS/Timestream",
 		Alias:     "timestream",
+		ResourceFilters: []*string{
+			aws.String("timestream:database"),
+			aws.String("timestream:table"),
+		},
+		DimensionRegexps: []*regexp.Regexp{
+			regexp.MustCompile(":database/(?P<DatabaseName>[^/]+)/table/(?P<TableName>[^/]+)"),
+			regexp.MustCompile(":database/(?P<DatabaseName>[^/]+)$"),
+		},
+		ArnFromDimensions: firstOf(
+			arnFromDimensions("timestream", "database/%s/table/%s", "DatabaseName", "TableName"),
+			arnFromDimensions("timestream", "database/%s", "DatabaseName"),
+		),
 	},
 	{
 		Namespace: "AWS/SecretsManager",
