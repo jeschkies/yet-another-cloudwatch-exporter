@@ -1029,6 +1029,11 @@ var SupportedServices = serviceConfigs{
 		ArnFromDimensions: arnFromDimensions("redshift", "cluster:%s", "ClusterIdentifier"),
 	},
 	{
+		// Verified against a live namespace/workgroup: CloudWatch's "Namespace" and "Workgroup"
+		// dimensions carry the resource *name* (e.g. "my-workgroup"), but the canonical ARN embeds an
+		// internal UUID instead of the name (e.g. "workgroup/3c63945d-3bea-4863-8c5c-7d0b5b285288").
+		// The UUID isn't derivable from the name without an API call, so neither DimensionRegexps nor
+		// ArnFromDimensions can bridge this -- same failure mode as AWS/AutoScaling and AWS/Kafka.
 		Namespace: "AWS/Redshift-Serverless",
 		Alias:     "redshift",
 		ResourceFilters: []*string{
