@@ -69,6 +69,7 @@ type Job struct {
 	RecentlyActiveOnly          bool              `yaml:"recentlyActiveOnly"`
 	IncludeContextOnInfoMetrics bool              `yaml:"includeContextOnInfoMetrics"`
 	EnhancedMetrics             []*EnhancedMetric `yaml:"enhancedMetrics"`
+	EnableArnFallback           bool              `yaml:"enabled_arn_fallback"`
 	JobLevelMetricFields        `yaml:",inline"`
 }
 
@@ -466,7 +467,9 @@ func (c *ScrapeConf) toModelConfig() model.JobsConfig {
 		job.IncludeContextOnInfoMetrics = discoveryJob.IncludeContextOnInfoMetrics
 		job.DimensionsRegexps = svc.ToModelDimensionsRegexp()
 		job.EnhancedMetrics = svc.toModelEnhancedMetricsConfig(discoveryJob.EnhancedMetrics)
-		job.ArnFallback = svc.toArnFallback()
+		if discoveryJob.EnableArnFallback {
+			job.ArnFallback = svc.toArnFallback()
+		}
 
 		job.ExportedTagsOnMetrics = []string{}
 		if len(c.Discovery.ExportedTagsOnMetrics) > 0 {
