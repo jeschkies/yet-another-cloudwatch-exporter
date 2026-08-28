@@ -483,7 +483,12 @@ func Test_getFilteredMetricDatas(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assoc := maxdimassociator.NewAssociator(promslog.NewNopLogger(), tt.args.dimensionRegexps, tt.args.resources)
-			metricDatas := getFilteredMetricDatas(promslog.NewNopLogger(), tt.args.namespace, tt.args.tagsOnMetrics, tt.args.metricsList, tt.args.dimensionNameRequirements, tt.args.m, assoc)
+			discoveryJob := model.DiscoveryJob{
+				Namespace:                 tt.args.namespace,
+				ExportedTagsOnMetrics:     tt.args.tagsOnMetrics,
+				DimensionNameRequirements: tt.args.dimensionNameRequirements,
+			}
+			metricDatas := getFilteredMetricDatas(promslog.NewNopLogger(), discoveryJob, tt.args.metricsList, tt.args.m, assoc, tt.args.accountID, tt.args.region)
 			if len(metricDatas) != len(tt.wantGetMetricsData) {
 				t.Errorf("len(getFilteredMetricDatas()) = %v, want %v", len(metricDatas), len(tt.wantGetMetricsData))
 			}

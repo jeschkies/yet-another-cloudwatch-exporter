@@ -466,6 +466,7 @@ func (c *ScrapeConf) toModelConfig() model.JobsConfig {
 		job.IncludeContextOnInfoMetrics = discoveryJob.IncludeContextOnInfoMetrics
 		job.DimensionsRegexps = svc.ToModelDimensionsRegexp()
 		job.EnhancedMetrics = svc.toModelEnhancedMetricsConfig(discoveryJob.EnhancedMetrics)
+		job.ArnFallback = svc.toArnFallback()
 
 		job.ExportedTagsOnMetrics = []string{}
 		if len(c.Discovery.ExportedTagsOnMetrics) > 0 {

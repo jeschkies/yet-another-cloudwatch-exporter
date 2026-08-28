@@ -32,42 +32,58 @@ import (
 //
 // These are best-effort, statically derived from documented AWS ARN formats and have not been
 // validated against live AWS API responses; verify against real output before relying on them.
-type ArnFromDimensionsFunc func(partition, region, accountID string, dimensions map[string]string) (string, bool)
+type ArnFromDimensionsFunc func(region, accountID string, dimensions map[string]string) (string, bool)
+
+// partitionForRegion infers the AWS partition from a region name, the same way the AWS SDK's own
+// partition resolver does: region prefix determines partition. Region is always known at the call
+// site (it's what ListMetrics/GetResources were just queried against), so there's no need for a
+// caller-supplied partition that could disagree with it.
+func partitionForRegion(region string) string {
+	switch {
+	case strings.HasPrefix(region, "cn-"):
+		return "aws-cn"
+	case strings.HasPrefix(region, "us-gov-"):
+		return "aws-us-gov"
+	default:
+		return "aws"
+	}
+}
 
 // arnFromDimensions returns an ArnFromDimensionsFunc that builds a standard
 // "arn:{partition}:{service}:{region}:{account}:{resource}" ARN, substituting the named dimensions (in
 // order) into resourceFormat's %s verbs. Returns false if any of dimensionNames is missing or empty.
 func arnFromDimensions(service, resourceFormat string, dimensionNames ...string) ArnFromDimensionsFunc {
-	return func(partition, region, accountID string, dimensions map[string]string) (string, bool) {
+	return func(region, accountID string, dimensions map[string]string) (string, bool) {
 		resource, ok := formatResource(resourceFormat, dimensions, dimensionNames)
 		if !ok {
 			return "", false
 		}
-		return fmt.Sprintf("arn:%s:%s:%s:%s:%s", partition, service, region, accountID, resource), true
+		return fmt.Sprintf("arn:%s:%s:%s:%s:%s", partitionForRegion(region), service, region, accountID, resource), true
 	}
 }
 
 // arnFromDimensionsNoRegion is like arnFromDimensions, but for global services whose ARNs omit the
-// region segment (e.g. CloudFront, Global Accelerator, Network Manager).
+// region segment (e.g. CloudFront, Global Accelerator, Network Manager). Partition is still inferred
+// from region, since the region the metric was fetched from still tells us which partition it's in.
 func arnFromDimensionsNoRegion(service, resourceFormat string, dimensionNames ...string) ArnFromDimensionsFunc {
-	return func(partition, _, accountID string, dimensions map[string]string) (string, bool) {
+	return func(region, accountID string, dimensions map[string]string) (string, bool) {
 		resource, ok := formatResource(resourceFormat, dimensions, dimensionNames)
 		if !ok {
 			return "", false
 		}
-		return fmt.Sprintf("arn:%s:%s::%s:%s", partition, service, accountID, resource), true
+		return fmt.Sprintf("arn:%s:%s::%s:%s", partitionForRegion(region), service, accountID, resource), true
 	}
 }
 
 // arnFromDimensionsNoAccount is like arnFromDimensions, but for services whose ARNs omit both the
 // region and account segments (e.g. S3, Route 53).
 func arnFromDimensionsNoAccount(service, resourceFormat string, dimensionNames ...string) ArnFromDimensionsFunc {
-	return func(partition, _, _ string, dimensions map[string]string) (string, bool) {
+	return func(region, _ string, dimensions map[string]string) (string, bool) {
 		resource, ok := formatResource(resourceFormat, dimensions, dimensionNames)
 		if !ok {
 			return "", false
 		}
-		return fmt.Sprintf("arn:%s:%s:::%s", partition, service, resource), true
+		return fmt.Sprintf("arn:%s:%s:::%s", partitionForRegion(region), service, resource), true
 	}
 }
 
@@ -86,7 +102,7 @@ func formatResource(resourceFormat string, dimensions map[string]string, dimensi
 // identityArn returns an ArnFromDimensionsFunc for namespaces where CloudWatch already publishes the
 // full resource ARN as the dimension's value (e.g. CertificateArn, StateMachineArn).
 func identityArn(dimensionName string) ArnFromDimensionsFunc {
-	return func(_, _, _ string, dimensions map[string]string) (string, bool) {
+	return func(_, _ string, dimensions map[string]string) (string, bool) {
 		v, ok := dimensions[dimensionName]
 		return v, ok && v != ""
 	}
@@ -95,9 +111,9 @@ func identityArn(dimensionName string) ArnFromDimensionsFunc {
 // firstOf tries each ArnFromDimensionsFunc in order and returns the first one that succeeds. Used for
 // namespaces where a metric carries one of several possible resource-identifying dimension sets.
 func firstOf(fns ...ArnFromDimensionsFunc) ArnFromDimensionsFunc {
-	return func(partition, region, accountID string, dimensions map[string]string) (string, bool) {
+	return func(region, accountID string, dimensions map[string]string) (string, bool) {
 		for _, fn := range fns {
-			if arn, ok := fn(partition, region, accountID, dimensions); ok {
+			if arn, ok := fn(region, accountID, dimensions); ok {
 				return arn, true
 			}
 		}
@@ -162,6 +178,20 @@ func (sc ServiceConfig) toModelEnhancedMetricsConfig(ems []*EnhancedMetric) []*m
 	}
 
 	return emc
+}
+
+func (sc ServiceConfig) toArnFallback() model.ArnFallbackFunc {
+	if sc.ArnFromDimensions == nil {
+		return nil
+	}
+
+	return func(region, accountID string, dimensions []model.Dimension) (string, bool) {
+		dimensionsMap := make(map[string]string)
+		for _, d := range dimensions {
+			dimensionsMap[d.Name] = d.Value
+		}
+		return sc.ArnFromDimensions(region, accountID, dimensionsMap)
+	}
 }
 
 type serviceConfigs []ServiceConfig
