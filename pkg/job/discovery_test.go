@@ -13,12 +13,17 @@
 package job
 
 import (
+	"context"
+	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/prometheus/common/promslog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/clients/cloudwatch"
+	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/clients/tagging"
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/config"
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/job/maxdimassociator"
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/model"
@@ -594,6 +599,169 @@ func Test_getFilteredMetricDatas_inferArnFromDimensions(t *testing.T) {
 			require.Len(t, got, 1)
 			require.Equal(t, tt.wantARN, got[0].ResourceName)
 			require.Equal(t, metricConfig.Name, got[0].MetricName)
+		})
+	}
+}
+
+// ec2DiscoveryJob builds an AWS/EC2 job through the config layer so it carries the real
+// dimension regexps and, when opted in, the real ARN template.
+func ec2DiscoveryJob(t *testing.T, infer bool) model.DiscoveryJob {
+	t.Helper()
+	cfg := config.ScrapeConf{
+		APIVersion: "v1alpha1",
+		Discovery: config.Discovery{
+			ExportedTagsOnMetrics: config.ExportedTagsOnMetrics{"AWS/EC2": {"foo:Bar"}},
+			Jobs: []*config.Job{{
+				Type:                           "AWS/EC2",
+				Regions:                        []string{"us-east-1"},
+				Roles:                          []config.Role{{}},
+				Metrics:                        []*config.Metric{{Name: "CPUUtilization", Statistics: []string{"Average"}, Period: 60, Length: 600}},
+				InferMissingArnsFromDimensions: infer,
+			}},
+		},
+	}
+	jobsCfg, err := cfg.Validate(promslog.NewNopLogger())
+	require.NoError(t, err)
+	require.Len(t, jobsCfg.DiscoveryJobs, 1)
+	return jobsCfg.DiscoveryJobs[0]
+}
+
+func resourceNames(data []*model.CloudwatchData) []string {
+	var names []string
+	for _, d := range data {
+		names = append(names, d.ResourceName)
+	}
+	return names
+}
+
+func Test_getFilteredMetricDatas_inferArnOnAssociatorSkip(t *testing.T) {
+	const (
+		region      = "us-east-1"
+		accountID   = "123456789012"
+		taggedARN   = "arn:aws:ec2:us-east-1:123456789012:instance/i-0aaa111bbb222ccc3"
+		inferredARN = "arn:aws:ec2:us-east-1:123456789012:instance/i-0ddd444eee555fff6"
+	)
+	metricConfig := &model.MetricConfig{Name: "CPUUtilization", Statistics: []string{"Average"}, Period: 60, Length: 600}
+	tagged := &model.TaggedResource{
+		ARN:       taggedARN,
+		Namespace: "AWS/EC2",
+		Region:    region,
+		Tags:      []model.Tag{{Key: "foo:Bar", Value: "baz"}},
+	}
+	// Both metrics match the EC2 dimension regexp; only the first matches a discovered resource,
+	// so the associator asks to skip the second.
+	metricsList := []*model.Metric{
+		{MetricName: "CPUUtilization", Namespace: "AWS/EC2", Dimensions: []model.Dimension{{Name: "InstanceId", Value: "i-0aaa111bbb222ccc3"}}},
+		{MetricName: "CPUUtilization", Namespace: "AWS/EC2", Dimensions: []model.Dimension{{Name: "InstanceId", Value: "i-0ddd444eee555fff6"}}},
+	}
+
+	tests := []struct {
+		name     string
+		infer    bool
+		wantARNs []string
+		wantTags [][]model.Tag
+	}{
+		{
+			name:     "opted out drops the metric of the undiscovered instance",
+			infer:    false,
+			wantARNs: []string{taggedARN},
+			wantTags: [][]model.Tag{{{Key: "foo:Bar", Value: "baz"}}},
+		},
+		{
+			name:     "opted in infers the ARN of the undiscovered instance",
+			infer:    true,
+			wantARNs: []string{taggedARN, inferredARN},
+			wantTags: [][]model.Tag{{{Key: "foo:Bar", Value: "baz"}}, {{Key: "foo:Bar", Value: ""}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			discoveryJob := ec2DiscoveryJob(t, tt.infer)
+			assoc := maxdimassociator.NewAssociator(promslog.NewNopLogger(), discoveryJob.DimensionsRegexps, []*model.TaggedResource{tagged})
+
+			got := getFilteredMetricDatas(promslog.NewNopLogger(), discoveryJob, metricsList, metricConfig, assoc, accountID, region)
+
+			require.Equal(t, tt.wantARNs, resourceNames(got))
+			for i, d := range got {
+				require.Equal(t, tt.wantTags[i], d.Tags)
+			}
+		})
+	}
+}
+
+type stubTaggingClient struct {
+	err error
+}
+
+func (s stubTaggingClient) GetResources(context.Context, model.DiscoveryJob, string) ([]*model.TaggedResource, error) {
+	return nil, s.err
+}
+
+type stubCloudwatchClient struct {
+	metrics []*model.Metric
+}
+
+func (s stubCloudwatchClient) ListMetrics(_ context.Context, _ string, _ *model.MetricConfig, _ bool, fn func(page []*model.Metric)) error {
+	fn(s.metrics)
+	return nil
+}
+
+func (stubCloudwatchClient) GetMetricData(context.Context, []*model.CloudwatchData, string, time.Time, time.Time) []cloudwatch.MetricDataResult {
+	return nil
+}
+
+func (stubCloudwatchClient) GetMetricStatistics(context.Context, *slog.Logger, []model.Dimension, string, *model.MetricConfig) []*model.MetricStatisticsResult {
+	return nil
+}
+
+type passthroughProcessor struct{}
+
+func (passthroughProcessor) Run(_ context.Context, _ string, requests []*model.CloudwatchData) ([]*model.CloudwatchData, error) {
+	return requests, nil
+}
+
+func Test_runDiscoveryJob_noTaggedResources(t *testing.T) {
+	metrics := []*model.Metric{
+		{MetricName: "CPUUtilization", Namespace: "AWS/EC2", Dimensions: []model.Dimension{{Name: "InstanceId", Value: "i-0ddd444eee555fff6"}}},
+	}
+
+	tests := []struct {
+		name     string
+		infer    bool
+		wantARNs []string
+	}{
+		{
+			name:     "opted out exports nothing",
+			infer:    false,
+			wantARNs: nil,
+		},
+		{
+			name:     "opted in lists metrics and exports the inferred resources",
+			infer:    true,
+			wantARNs: []string{"arn:aws:ec2:us-east-1:123456789012:instance/i-0ddd444eee555fff6"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job := ec2DiscoveryJob(t, tt.infer)
+
+			resources, data := runDiscoveryJob(
+				context.Background(),
+				promslog.NewNopLogger(),
+				job,
+				"123456789012",
+				"us-east-1",
+				stubTaggingClient{err: tagging.ErrExpectedToFindResources},
+				stubCloudwatchClient{metrics: metrics},
+				passthroughProcessor{},
+				nil,
+				model.Role{},
+			)
+
+			require.Empty(t, resources)
+			require.Equal(t, tt.wantARNs, resourceNames(data))
 		})
 	}
 }
