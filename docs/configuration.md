@@ -126,6 +126,10 @@ dimensionNameRequirements:
 # Only namespaces with a known ARN shape are covered. Metrics in any other namespace keep the `global` ARN, as do
 # aggregate metrics whose dimensions identify a group rather than a single resource (for example an AWS/EC2 metric
 # dimensioned only by AutoScalingGroupName).
+# Inference applies to every resource of a covered namespace that the Tagging API did not return, whether it is
+# untagged or excluded by `searchTags`, so with this option on `searchTags` no longer narrows which resources of
+# such a namespace are exported. A job in a covered namespace whose Tagging API pass returns no resources at all
+# still lists metrics and exports the inferred resources instead of exporting nothing.
 [ inferMissingArnsFromDimensions: <boolean> ]
 
 # (optional) This is an experimental feature that can be used to enable enhanced metrics for specific services within this discovery job. It might be subject to changes in future releases.

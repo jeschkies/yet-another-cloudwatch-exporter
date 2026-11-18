@@ -64,12 +64,16 @@ func runDiscoveryJob(
 
 	resources, err := clientTag.GetResources(ctx, job, region)
 	if err != nil {
-		if errors.Is(err, tagging.ErrExpectedToFindResources) {
-			logger.Warn("No tagged resources made it through filtering", "err", err)
-		} else {
+		if !errors.Is(err, tagging.ErrExpectedToFindResources) {
 			logger.Error("Couldn't describe resources", "err", err)
+			return nil, nil
 		}
-		return nil, nil
+		if job.InferArnFromDimensions == nil {
+			logger.Warn("No tagged resources made it through filtering", "err", err)
+			return nil, nil
+		}
+		// Untagged resources are still reachable through their metrics' dimensions.
+		resources = nil
 	}
 
 	if len(resources) == 0 {
@@ -192,24 +196,22 @@ func getFilteredMetricDatas(
 			continue
 		}
 
-		matchedResource, skip := assoc.AssociateMetricToResource(cwMetric)
-		if skip {
-			dimensions := make([]string, 0, len(cwMetric.Dimensions))
-			for _, dim := range cwMetric.Dimensions {
-				dimensions = append(dimensions, fmt.Sprintf("%s=%s", dim.Name, dim.Value))
-			}
-			logger.Debug("skipping metric unmatched by associator", "metric", m.Name, "dimensions", strings.Join(dimensions, ","))
-
-			continue
-		}
-
-		resource := matchedResource
+		resource, skip := assoc.AssociateMetricToResource(cwMetric)
 		if resource == nil {
-			arn := "global"
-			if discoveryJob.InferArnFromDimensions != nil {
-				if inferred, ok := discoveryJob.InferArnFromDimensions(region, accountID, cwMetric.Dimensions); ok {
-					arn = inferred
+			// A skipped metric names a resource of a known shape that the Tagging API did not return,
+			// the untagged case inference exists for, so it is dropped only when inference fails too.
+			arn, ok := inferArn(discoveryJob, region, accountID, cwMetric.Dimensions)
+			if !ok && skip {
+				dimensions := make([]string, 0, len(cwMetric.Dimensions))
+				for _, dim := range cwMetric.Dimensions {
+					dimensions = append(dimensions, fmt.Sprintf("%s=%s", dim.Name, dim.Value))
 				}
+				logger.Debug("skipping metric unmatched by associator", "metric", m.Name, "dimensions", strings.Join(dimensions, ","))
+
+				continue
+			}
+			if !ok {
+				arn = "global"
 			}
 			resource = &model.TaggedResource{
 				ARN:       arn,
@@ -242,6 +244,13 @@ func getFilteredMetricDatas(
 		}
 	}
 	return getMetricsData
+}
+
+func inferArn(job model.DiscoveryJob, region, accountID string, dimensions []model.Dimension) (string, bool) {
+	if job.InferArnFromDimensions == nil {
+		return "", false
+	}
+	return job.InferArnFromDimensions(region, accountID, dimensions)
 }
 
 func metricDimensionsMatchNames(metric *model.Metric, dimensionNameRequirements []string) bool {
